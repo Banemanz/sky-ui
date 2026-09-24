@@ -26,7 +26,13 @@
 
 // You can also target all three games at once by defining GINPUT_COMPILE_CROSSCOMPATIBLE_VERSION - define it
 // in your project settings, code headers or just uncomment the line below
-#define GINPUT_COMPILE_CROSSCOMPATIBLE_VERSION
+#if defined(GTA3)
+#define GINPUT_COMPILE_III_VERSION
+#elif defined(GTAVC)
+#define GINPUT_COMPILE_VC_VERSION
+#elif defined(GTASA)
+#define GINPUT_COMPILE_SA_VERSION
+#endif
 
 enum eGInputEvent
 {

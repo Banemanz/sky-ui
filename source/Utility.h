@@ -5,9 +5,11 @@
 #include "CSprite2d.h"
 #include "CDraw.h"
 #include "CText.h"
+#include "PixelCopy.h"
+#include "MenuOptions.h"
 
-#define FLASH_ITEM(on, off) (CTimer::m_snTimeInMilliseconds % on + off < on)
-#define FLASH_ITEM_PAUSE_MODE(on, off) (CTimer::m_snTimeInMillisecondsPauseMode % on + off < on)
+#define FLASH_ITEM(on, off) ((CTimer::m_snTimeInMilliseconds % ((on) + (off))) < (on))
+#define FLASH_ITEM_PAUSE_MODE(on, off) ((CTimer::m_snTimeInMillisecondsPauseMode % ((on) + (off))) < (on))
 
 #define DEFAULT_SCREEN_WIDTH 640.0f
 #define DEFAULT_SCREEN_HEIGHT 480.0f
@@ -21,7 +23,9 @@ static float GetAspectRatio() {
 #elif GTASA
     float& fScreenAspectRatio = CDraw::ms_fAspectRatio;
 #endif
-    return fScreenAspectRatio;
+    const float display = SCREEN_HEIGHT > 0 ? float(SCREEN_WIDTH) / SCREEN_HEIGHT : DEFAULT_SCREEN_ASPECT_RATIO;
+    return skyMenuOptions.displayAspect || !std::isfinite(fScreenAspectRatio) || fScreenAspectRatio <= 0.0f
+        ? display : fScreenAspectRatio;
 }
 
 #define SCREEN_ASPECT_RATIO GetAspectRatio() // (SCREEN_WIDTH / SCREEN_HEIGHT)
@@ -32,7 +36,7 @@ static float ScaleX(float x) {
 }
 
 static float ScaleXKeepCentered(float x) {
-    float f = ((SCREEN_WIDTH == DEFAULT_SCREEN_WIDTH) ? (x) : (SCREEN_WIDTH - ScaleX(DEFAULT_SCREEN_WIDTH)) / 2 + ScaleX((x)));
+    float f = ((SCREEN_WIDTH - ScaleX(DEFAULT_SCREEN_WIDTH)) / 2 + ScaleX(x));
     return f;
 }
 
@@ -51,7 +55,28 @@ static float ScaleH(float h) {
     return f;
 }
 
+// Save the states touched by SkyUI rather than imposing fixed defaults on other renderers.
+struct SkyRenderStateGuard {
+    static constexpr RwRenderState states[] = {
+        rwRENDERSTATETEXTURERASTER, rwRENDERSTATETEXTUREADDRESS, rwRENDERSTATETEXTUREFILTER,
+        rwRENDERSTATESHADEMODE, rwRENDERSTATEZTESTENABLE, rwRENDERSTATEZWRITEENABLE,
+        rwRENDERSTATEVERTEXALPHAENABLE, rwRENDERSTATESRCBLEND, rwRENDERSTATEDESTBLEND,
+        rwRENDERSTATEFOGENABLE, rwRENDERSTATETEXTUREPERSPECTIVE, rwRENDERSTATECULLMODE
+    };
+    uintptr_t values[sizeof(states) / sizeof(states[0])] = {};
+    bool valid[sizeof(states) / sizeof(states[0])] = {};
+    SkyRenderStateGuard() {
+        for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); ++i)
+            valid[i] = RwRenderStateGet(states[i], &values[i]) != 0;
+    }
+    ~SkyRenderStateGuard() {
+        for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); ++i)
+            if (valid[i]) RwRenderStateSet(states[i], reinterpret_cast<void*>(values[i]));
+    }
+};
+
 static void Draw2DPolygon(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4, const CRGBA& color) {
+    SkyRenderStateGuard renderState;
     CSprite2d::SetVertices(x1, y1, x2, y2, x3, y3, x4, y4, color, color, color, color);
     RwRenderStateSet(rwRENDERSTATETEXTURERASTER, 0);
     RwRenderStateSet(rwRENDERSTATESHADEMODE, (void*)rwSHADEMODEFLAT);
@@ -111,7 +136,8 @@ static void SetVertex(float x, float y, float z, float w, float u, float v, int3
 }
 
 static void End(const CSprite2d* sprite) {
-    if (sprite)
+    SkyRenderStateGuard renderState;
+    if (sprite && sprite->m_pTexture)
         RwRenderStateSet(rwRENDERSTATETEXTURERASTER, sprite->m_pTexture->raster);
     else
         RwRenderStateSet(rwRENDERSTATETEXTURERASTER, 0);
@@ -205,6 +231,7 @@ static wchar_t GetUpperCase(wchar_t c) {
 static wchar_t GetLowerCase(wchar_t c) {
     if (c >= 'A' && c <= 'Z')
         return c + 32;
+    return c;
 }
 
 static std::wstring wbuff = {};
@@ -224,29 +251,7 @@ static wchar_t* LowerCase(wchar_t* s) {
     return (wchar_t*)wbuff.c_str();
 }
 
-static RwTexture* CreateRwTexture(int32_t w, int32_t h, uint8_t* p) {
-    RwTexture* texture = nullptr;
-
-    RwRaster* raster = RwRasterCreate(w, h, 0, rwRASTERTYPETEXTURE | rwRASTERFORMAT8888);
-    RwUInt32* pixels = (RwUInt32*)RwRasterLock(raster, 0, rwRASTERLOCKWRITE);
-
-    for (int32_t i = 0; i < w * h * 4; i += 4) {
-        uint8_t r = p[i + 2];
-        uint8_t g = p[i + 1];
-        uint8_t b = p[i];
-
-        p[i + 2] = b;
-        p[i + 1] = g;
-        p[i] = r;
-    }
-
-    memcpy(pixels, p, w * h * 4);
-    RwRasterUnlock(raster);
-    texture = RwTextureCreate(raster);
-    RwTextureSetFilterMode(texture, rwFILTERLINEAR);
-
-    return texture;
-}
+#include "TextureUpload.h"
 
 static void DrawProgressBar(float x, float y, float w, float h, float progress, CRGBA const& front, CRGBA const& back) {
     progress = plugin::Clamp(progress, 0.0f, 1.0f);
@@ -266,11 +271,11 @@ static uint64_t RsTimer() {
     return plugin::CallAndReturnDyn<uint64_t>(0x584890);
 }
 
-static int32_t RsCameraShowRaster(RwCamera* cam) {
+static int32_t SkyRsCameraShowRaster(RwCamera* cam) {
     return plugin::CallAndReturnDyn<int32_t>(0x5848A0, cam);
 }
 
-static void DefinedState2d() {
+static void SkyDefinedState2d() {
     RwRenderStateSet(rwRENDERSTATETEXTUREADDRESS, (void*)1);
     RwRenderStateSet(rwRENDERSTATETEXTUREPERSPECTIVE, 0);
     RwRenderStateSet(rwRENDERSTATEZTESTENABLE, (void*)0);

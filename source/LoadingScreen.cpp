@@ -1,4 +1,4 @@
-#ifdef GTA3
+#if defined(GTA3) && defined(SKYUI_LCS)
 #include "plugin.h"
 #include "LoadingScreen.h"
 #include "CTxdStore.h"
@@ -170,7 +170,7 @@ void CLoadingScreen::StartFading() {
 
 void CLoadingScreen::DisplayPCScreen() {
     if (RwCameraBeginUpdate(Scene.m_pCamera)) {
-        DefinedState2d();
+        SkyDefinedState2d();
         RwRenderStateSet(rwRENDERSTATEVERTEXALPHAENABLE, (void*)(TRUE));
         RenderSplash();
         if (m_currDisplayedSplash > 0 && (!m_bFading || m_currDisplayedSplash != 1)) {

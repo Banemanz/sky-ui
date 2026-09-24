@@ -58,27 +58,27 @@ class CMenuManager;
 class SkyUI {
 public:
 	static inline uint32_t GetAlpha(uint32_t a = 255) {
-		return ApiCALL::CallAndReturn<uint32_t>(__FUNCTION__, a);
+		return ApiCALL::CallAndReturn<uint32_t>("SkyUI::GetAlpha", a);
 	}
 
 	static inline float GetMenuOffsetX() {
-		return ApiCALL::CallAndReturn<float>(__FUNCTION__);
+		return ApiCALL::CallAndReturn<float>("SkyUI::GetMenuOffsetX");
 	}
 
 	static inline bool GetGTA3LCS() {
-		return ApiCALL::CallAndReturn<bool>(__FUNCTION__);
+		return ApiCALL::CallAndReturn<bool>("SkyUI::GetGTA3LCS");
 	}
 
 	static inline uint8_t GetCurrentInput() {
-		return ApiCALL::CallAndReturn<uint8_t>(__FUNCTION__);
+		return ApiCALL::CallAndReturn<uint8_t>("SkyUI::GetCurrentInput");
 	}
 
 	static inline int32_t GetTimeToWaitBeforeStateChange() {
-		return ApiCALL::CallAndReturn<int32_t>(__FUNCTION__);
+		return ApiCALL::CallAndReturn<int32_t>("SkyUI::GetTimeToWaitBeforeStateChange");
 	}
 
 	static inline uint8_t GetCheckHoverForStandardInput(CMenuManager* _this) {
-		return ApiCALL::CallAndReturn<uint8_t, CMenuManager*>(__FUNCTION__, _this);
+		return ApiCALL::CallAndReturn<uint8_t, CMenuManager*>("SkyUI::GetCheckHoverForStandardInput", _this);
 	}
 
 	typedef uint8_t(*MenuOptionCB)(uint32_t action, int8_t arrows, bool* back, bool enter);
@@ -91,22 +91,22 @@ public:
 	typedef char_t* (*MenuOptionStringsCB)(uint32_t action);
 
 	static inline void ProcessMenuOptionsCB(MenuOptionCB cb) {
-		ApiCALL::Call(__FUNCTION__, cb);
+		ApiCALL::Call("SkyUI::ProcessMenuOptionsCB", cb);
 	}
 
 	static inline void ProcessMenuOptionsStringsCB(MenuOptionStringsCB cb) {
-		ApiCALL::Call(__FUNCTION__, cb);
+		ApiCALL::Call("SkyUI::ProcessMenuOptionsStringsCB", cb);
 	}
 
 	static inline void AddEntryToMenuScreen(uint32_t screen, uint32_t entry, uint32_t action, const char* entryName, uint32_t targetScreen, uint32_t orientation) {
-		ApiCALL::Call(__FUNCTION__, screen, entry, action, entryName, targetScreen, orientation);
+		ApiCALL::Call("SkyUI::AddEntryToMenuScreen", screen, entry, action, entryName, targetScreen, orientation);
 	}
 
 	static inline void SaveOrLoadSettingsCB(void (*cb)(bool isLoading)) {
-		ApiCALL::Call(__FUNCTION__, cb);
+		ApiCALL::Call("SkyUI::SaveOrLoadSettingsCB", cb);
 	}
 
 	static inline void SaveSettings() {
-		ApiCALL::Call(__FUNCTION__);
+		ApiCALL::Call("SkyUI::SaveSettings");
 	}
 };

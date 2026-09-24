@@ -1,5 +1,5 @@
 #pragma once
-#ifdef GTA3
+#if defined(GTA3) && defined(SKYUI_LCS)
 #include "PluginBase.h"
 #include "CSprite2d.h"
 #include "Audio.h"
