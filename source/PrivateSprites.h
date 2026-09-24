@@ -74,6 +74,8 @@ public:
         CSprite2d sprite;
         sprite.m_pTexture = texture;
         sprite.Draw(rect, color);
+        // VC ~CSprite2d destroys m_pTexture (0x578A40). This is borrowed.
+        sprite.m_pTexture = nullptr;
         return true;
     }
     bool Draw(const std::string& name, float x, float y, float w, float h, const CRGBA& color) {

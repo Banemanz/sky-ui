@@ -1056,6 +1056,18 @@ public:
             justEnteredTab = false;
         }
 
+        // A foreign menu can return to a tab root without switching SkyUI's
+        // selected tab. Its native parent points to itself, so reconcile the
+        // root before handling Back; leave foreign pages and child pages alone.
+        if (!saveMenuActive) {
+            for (size_t i = 0; i < tabs.size(); ++i) {
+                if (tabs[i].targetPage == _this->m_nCurrentMenuPage) {
+                    currentTab = static_cast<uint8_t>(i);
+                    break;
+                }
+            }
+        }
+
         if (_this->m_nCurrentMenuPage != GetTargetPage() 
 #ifdef GTAVC
             || IsCurrentScreenCustom(_this)
@@ -1114,7 +1126,7 @@ public:
         auto* pad = CPad::GetPad(0);
         UpdateMouse(menu);
         const bool settingsClick = !controllerSettings.active && menu->m_bShowMouse &&
-            CheckHover(menu, ScaleXKeepCentered(36.0f), ScaleXKeepCentered(360.0f), ScaleY(369.0f), ScaleY(395.0f)) == 2;
+            CheckHover(menu, ScaleXKeepCentered(36.0f), ScaleXKeepCentered(360.0f), ScaleY(359.0f), ScaleY(379.0f)) == 2;
         const bool toggle = settingsClick || (pad->NewKeyState.FKeys[5] && !pad->OldKeyState.FKeys[5]) ||
             (HasPadInHands() && pad->NewState.Select && !pad->OldState.Select);
         if (toggle && currentInput == INPUT_STANDARD) {
@@ -2217,7 +2229,7 @@ public:
         CFont::SetFontStyle(FONT_SUBTITLES);
         CFont::SetScale(ScaleX(0.30f), ScaleY(0.62f));
         CFont::SetColor(CRGBA(225, 225, 225, GetAlpha()));
-        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(374.0f), HasPadInHands() ?
+        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(364.0f), HasPadInHands() ?
             "Back/Select: GInput settings" : "F6 / click here: GInput settings");
 
         CRGBA col = { 255, 255, 255, (uint8_t)GetAlpha(255) };
@@ -3015,7 +3027,7 @@ public:
 
 #ifdef GTAVC 
         if (i == currentTab && currentInput == INPUT_TAB)
-            UpdateItemPoly(_this, x + strWidth / 2, y + ScaleY(10.0f), ScaleX(4.0f) + strWidth / 2, ScaleY(18.0f));
+            UpdateItemPoly(_this, x + strWidth / 2, y + ScaleY(10.0f), ScaleX(4.0f) + strWidth / 2, ScaleY(10.0f));
 #endif
 
         RwRenderStateSet(rwRENDERSTATETEXTUREFILTER, (void*)rwFILTERNEAREST);
@@ -3671,7 +3683,11 @@ public:
 #ifdef GTAVC        
         aScreens[MENUPAGE_CONTROLLER_PS2].m_aEntries[0].m_nX += 42;
 #else
-        aScreens[MENUPAGE_CONTROLLER_PS2].m_aEntries[0].m_nY += 22;
+        // Explicit compact rows end before the diagram labels at y=165.
+        for (int i = 0; i < 3; ++i) {
+            aScreens[MENUPAGE_CONTROLLER_PS2].m_aEntries[i].m_nX = 40;
+            aScreens[MENUPAGE_CONTROLLER_PS2].m_aEntries[i].m_nY = 90 + i * 24;
+        }
 #endif
 
 #endif
@@ -3701,7 +3717,7 @@ public:
 
         frontendSprites.Clear();
         const std::string frontendDirectory = PLUGIN_PATH("SkyUI\\frontend");
-        std::ofstream(PLUGIN_PATH("SkyUI-assets.log"), std::ios::trunc) << "SkyUI v7 private assets\n";
+        std::ofstream(PLUGIN_PATH("SkyUI-assets.log"), std::ios::trunc) << "SkyUI v8 private assets\n";
 #define SKY_LOAD(store, directory, name) store.Load(directory, #name, sky_png_##name, sizeof(sky_png_##name))
 #ifdef GTASA
         SKY_LOAD(frontendSprites, frontendDirectory, CONTROLLER_PS2);
@@ -3945,8 +3961,8 @@ public:
         CFont::SetOrientation(ALIGN_LEFT);
         CFont::SetScale(ScaleX(0.3f), ScaleY(0.7f));
         CFont::SetColor(CRGBA(225, 225, 225, 255));
-        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(80.0f), std::string(HasPadInHands() ? "Square/X: save camera photos " : "F5: save camera photos ") + (_this->m_bPrefsSavePhotos ? "On" : "Off"));
-        if (!galleryStatus.empty()) PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(103.0f), galleryStatus);
+        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(112.0f), std::string(HasPadInHands() ? "Square/X: save camera photos " : "F5: save camera photos ") + (_this->m_bPrefsSavePhotos ? "On" : "Off"));
+        if (!galleryStatus.empty()) PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(132.0f), galleryStatus);
 
         if (currentInput == INPUT_TAB) {
             CFont::SetProportional(true);
@@ -4586,7 +4602,7 @@ public:
         // IDB: DrawFrontEnd tail-jumps to DrawBackground, E9 27 F4 FF FF.
         const uint8_t expected[] = {0xE9, 0x27, 0xF4, 0xFF, 0xFF};
         std::ofstream log(PLUGIN_PATH("SkyUI-render.log"), std::ios::trunc);
-        log << "SkyUI v7 SA frontend; " << plugin::GetGameVersionName() << '\n';
+        log << "SkyUI v8 SA frontend; " << plugin::GetGameVersionName() << '\n';
         HMODULE module = nullptr;
         char modulePath[MAX_PATH] = {};
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -5041,7 +5057,7 @@ public:
 #ifdef GTA3
         auto processButtonPresses = [](CMenuManager* _this, uint32_t) SKY_FASTCALL_LAMBDA {
             if (!controllerSettings.active && currentInput == INPUT_STANDARD) {
-                if (GetCheckHoverForStandardInput(_this)) {
+                if (GetEsc() || GetEscGamePadOnly() || GetCheckHoverForStandardInput(_this)) {
                     _this->ProcessButtonPresses();
                 }
             }
@@ -5053,7 +5069,7 @@ public:
 #else
         auto userInput = [](CMenuManager* _this, uint32_t) SKY_FASTCALL_LAMBDA {
             if (!controllerSettings.active && currentInput == INPUT_STANDARD) {
-                if (GetCheckHoverForStandardInput(_this)) {
+                if (GetEsc() || GetEscGamePadOnly() || GetCheckHoverForStandardInput(_this)) {
                     _this->UserInput();
                 }
             }
