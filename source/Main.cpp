@@ -71,6 +71,8 @@
 
 #include "GInputNative.h"
 #include "GInputSettings.h"
+#include "SkyUISettings.h"
+#include "MenuNavigation.h"
 #include "GalleryFiles.h"
 #include "FrontendTextCalls.h"
 #include <filesystem>
@@ -265,6 +267,10 @@ public:
     static inline IGInputPad* gInputPad = nullptr;
     static inline bool ginput = false;
     static inline GInputSettings controllerSettings;
+    static inline SkyUISettings menuSettings{skyMenuOptions};
+    static inline int settingsOwnerPage = -1;
+    static inline SkyMenuNavigation settingsNavigation;
+    static inline bool SettingsActive() { return controllerSettings.active || menuSettings.active; }
 
 #ifdef GTASA
 #define PAD_IV_CONTROLS_MODE (1)
@@ -281,6 +287,10 @@ public:
 #endif
 
     static inline bool modLoader = false;
+
+    static inline bool ShowControllerPrompts() {
+        return skyMenuOptions.ControllerPrompts(HasPadInHands());
+    }
 
     static inline bool HasPadInHands() {
         return ginput && gInputPad ? SkyGInputHasPad(gInputPad) : false;
@@ -1118,55 +1128,116 @@ public:
 #endif
     }
 
+    static inline void PrintSettingsColumn(float x, float y, const std::string& text, float width) {
+        CFont::SetScale(ScaleX(0.43f), ScaleY(0.85f));
+#ifdef GTASA
+        const float measured = CFont::GetStringWidth(text.c_str(), true);
+#else
+        const std::wstring wide(text.begin(), text.end());
+        const float measured = CFont::GetStringWidth(wide.c_str(), true);
+#endif
+        if (measured > width && measured > 0.0f)
+            CFont::SetScale(ScaleX(0.43f) * width / measured, ScaleY(0.85f));
+        PrintPlain(x, y, text);
+        CFont::SetScale(ScaleX(0.43f), ScaleY(0.85f));
+    }
+
     static inline bool ProcessControllerSettings(CMenuManager* menu) {
-        if (menu->m_nCurrentMenuPage != MENUPAGE_CONTROLLER_PS2) {
-            controllerSettings.active = false;
+        auto* pad = CPad::GetPad(0);
+        const int page = menu->m_nCurrentMenuPage;
+        // A foreign menu transition relinquishes the panel and its input lock.
+        if (SettingsActive() && page != settingsOwnerPage) {
+            controllerSettings.active = menuSettings.active = false; settingsNavigation.Reset();
             return false;
         }
-        auto* pad = CPad::GetPad(0);
+        const bool displayPage = page == MENUPAGE_DISPLAY_SETTINGS;
+        const bool controllerPage = page == MENUPAGE_CONTROLLER_PS2;
+        if (!displayPage && !controllerPage && !SettingsActive()) return false;
         UpdateMouse(menu);
-        const bool settingsClick = !controllerSettings.active && menu->m_bShowMouse &&
+        const bool linkClick = !SettingsActive() && menu->m_bShowMouse &&
             CheckHover(menu, ScaleXKeepCentered(36.0f), ScaleXKeepCentered(360.0f), ScaleY(359.0f), ScaleY(379.0f)) == 2;
-        const bool toggle = settingsClick || (pad->NewKeyState.FKeys[5] && !pad->OldKeyState.FKeys[5]) ||
-            (HasPadInHands() && pad->NewState.Select && !pad->OldState.Select);
-        if (toggle && currentInput == INPUT_STANDARD) {
-            controllerSettings.active = !controllerSettings.active;
+        const bool ownToggle = (pad->NewKeyState.FKeys[6] && !pad->OldKeyState.FKeys[6]) ||
+            (displayPage && ((linkClick) || (pad->NewState.Select && !pad->OldState.Select)));
+        const bool padToggle = controllerPage && ((skyMenuOptions.showGInputHint && linkClick) ||
+            (pad->NewKeyState.FKeys[5] && !pad->OldKeyState.FKeys[5]) ||
+            (pad->NewState.Select && !pad->OldState.Select));
+        if ((ownToggle || padToggle) && currentInput == INPUT_STANDARD) {
+            if (SettingsActive()) { controllerSettings.active = menuSettings.active = false; settingsNavigation.Reset(); }
+            else {
+                menuSettings.active = ownToggle;
+                controllerSettings.active = !ownToggle;
+                settingsOwnerPage = page;
+                settingsNavigation.Reset();
+            }
             ClearInput();
             return true;
         }
-        if (!controllerSettings.active) return false;
+        if (!SettingsActive()) return false;
         if (GetEsc() || GetEscGamePadOnly()) {
-            controllerSettings.active = false;
+            controllerSettings.active = menuSettings.active = false; settingsNavigation.Reset();
             ClearInput();
             return true;
         }
-        const int count = static_cast<int>(controllerSettings.options.size());
-        if (GetUp() || GetWheelUp()) controllerSettings.selection = (controllerSettings.selection + count - 1) % count;
-        if (GetDown() || GetWheelDown()) controllerSettings.selection = (controllerSettings.selection + 1) % count;
-        const int first = controllerSettings.selection / 7 * 7;
-        bool clicked = false;
+        GInputSettings& settings = menuSettings.active ? static_cast<GInputSettings&>(menuSettings) : controllerSettings;
+        if (menuSettings.active && ((pad->NewKeyState.home && !pad->OldKeyState.home) ||
+            (pad->NewState.ButtonSquare && !pad->OldState.ButtonSquare))) {
+            menuSettings.RestoreSelected();
+            return true;
+        }
+        const int count = static_cast<int>(settings.options.size());
+        const int navigation = settingsNavigation.Update(CTimer::m_snTimeInMillisecondsPauseMode,
+            pad->NewState.LeftStickX, pad->NewState.LeftStickY,
+            pad->NewState.DPadLeft || pad->NewKeyState.left,
+            pad->NewState.DPadRight || pad->NewKeyState.right,
+            pad->NewState.DPadUp || pad->NewKeyState.up,
+            pad->NewState.DPadDown || pad->NewKeyState.down);
+        if (navigation) menu->m_bShowMouse = false;
+        if (navigation == 3 || GetWheelUp()) settings.MoveSelection(-1);
+        if (navigation == 4 || GetWheelDown()) settings.MoveSelection(1);
+        if ((pad->NewKeyState.pgup && !pad->OldKeyState.pgup) ||
+            (pad->NewState.LeftShoulder1 && !pad->OldState.LeftShoulder1)) settings.MoveSelection(-1, true);
+        if ((pad->NewKeyState.pgdn && !pad->OldKeyState.pgdn) ||
+            (pad->NewState.RightShoulder1 && !pad->OldState.RightShoulder1)) settings.MoveSelection(1, true);
+        const int first = settings.selection / 7 * 7;
+        int edit = navigation == 1 ? -1 : navigation == 2 || GetEnter() ? 1 : 0;
         if (menu->m_bShowMouse) {
             for (int i = first; i < std::min(first + 7, count); ++i) {
                 float y = ScaleY(116.0f + (i - first) * 30.0f);
                 if (CheckHover(menu, ScaleXKeepCentered(52.0f), ScaleXKeepCentered(588.0f), y, y + ScaleY(25.0f)) == 2) {
-                    controllerSettings.selection = i;
-                    clicked = true;
+                    settings.selection = i;
+                    // Labels select without changing values. Explicit value halves
+                    // allow mouse-only decrement as well as increment.
+                    if (menu->m_nMousePosX >= ScaleXKeepCentered(454.0f))
+                        edit = menu->m_nMousePosX < ScaleXKeepCentered(518.0f) ? -1 : 1;
                 }
             }
+            if (CheckHover(menu, ScaleXKeepCentered(52.0f), ScaleXKeepCentered(174.0f), ScaleY(337.0f), ScaleY(354.0f)) == 2)
+                settings.MoveSelection(-1, true);
+            if (CheckHover(menu, ScaleXKeepCentered(440.0f), ScaleXKeepCentered(588.0f), ScaleY(337.0f), ScaleY(354.0f)) == 2)
+                settings.MoveSelection(1, true);
+            if (CheckHover(menu, ScaleXKeepCentered(52.0f), ScaleXKeepCentered(190.0f), ScaleY(383.0f), ScaleY(401.0f)) == 2) {
+                controllerSettings.active = menuSettings.active = false;
+                settingsNavigation.Reset(); ClearInput(); return true;
+            }
         }
-        if (GetLeft() || GetRight() || GetEnter() || clicked) {
-            if (controllerSettings.Change(GetLeft() ? -1 : 1)) {
+        if (edit && settings.Change(edit)) {
+            if (!menuSettings.active) {
                 prefsConfigSetup = controllerSettings.Read(0, 1) - 1;
                 prefsVibration = controllerSettings.Read(1) != 0;
                 configLayout = 0;
                 SetFocus();
             }
+#ifdef GTAVC
+            updateItemPoly = true;
+            updateBackPoly = true;
+#endif
         }
         previousTimeInMilliseconds = CTimer::m_snTimeInMillisecondsPauseMode;
         return true;
     }
 
     static inline void DrawControllerSettings(CMenuManager*) {
+        GInputSettings& settings = menuSettings.active ? static_cast<GInputSettings&>(menuSettings) : controllerSettings;
         CFont::SetAlphaFade(255.0f);
         CFont::SetSlant(0.0f);
 #ifdef GTASA
@@ -1175,7 +1246,7 @@ public:
 #else
         CFont::SetJustifyOff();
 #endif
-        CSprite2d::DrawRect(CRect(0, 0, SCREEN_WIDTH, ScaleY(404.0f)), CRGBA(14, 18, 25, 255));
+        CSprite2d::DrawRect(CRect(0, 0, SCREEN_WIDTH, menuSettings.active ? float(SCREEN_HEIGHT) : ScaleY(404.0f)), CRGBA(14, 18, 25, 255));
         #ifdef GTASA
         CFont::SetBackground(false, false);
 #else
@@ -1188,32 +1259,52 @@ public:
         CFont::SetWrapx(SCREEN_WIDTH);
         CFont::SetDropShadowPosition(0);
         CFont::SetColor(CRGBA(225, 225, 225, 255));
-        PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(68.0f), "GInput settings - Player " + std::to_string(controllerSettings.selectedPad));
-        if (controllerSettings.path.empty()) {
+        PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(68.0f), menuSettings.active ? "SkyUI options" : "GInput settings - Player " + std::to_string(settings.selectedPad));
+        if (settings.path.empty()) {
             PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(116.0f), "GInput 1.11 and its INI are required.");
         } else {
-            const int count = static_cast<int>(controllerSettings.options.size());
-            const int first = controllerSettings.selection / 7 * 7;
+            const int count = static_cast<int>(settings.options.size());
+            const int first = settings.selection / 7 * 7;
             for (int i = first; i < std::min(first + 7, count); ++i) {
                 float y = ScaleY(116.0f + (i - first) * 30.0f);
-                if (i == controllerSettings.selection)
+                if (i == settings.selection)
                     CSprite2d::DrawRect(CRect(ScaleXKeepCentered(46.0f), y - ScaleY(3.0f), ScaleXKeepCentered(594.0f), y + ScaleY(25.0f)), CRGBA(45, 76, 106, 255));
                 CFont::SetOrientation(ALIGN_LEFT);
-                PrintPlain(ScaleXKeepCentered(54.0f), y, controllerSettings.options[i].label);
-                std::string label = controllerSettings.ValueLabel(i);
+                PrintSettingsColumn(ScaleXKeepCentered(54.0f), y, settings.options[i].label, ScaleX(380.0f));
+                std::string label = settings.ValueLabel(i);
                 CFont::SetOrientation(ALIGN_RIGHT);
-                PrintPlain(ScaleXKeepCentered(582.0f), y, label);
+                PrintSettingsColumn(ScaleXKeepCentered(566.0f), y, label, ScaleX(86.0f));
+                CFont::SetOrientation(ALIGN_LEFT);
+                PrintPlain(ScaleXKeepCentered(454.0f), y, "-");
+                PrintPlain(ScaleXKeepCentered(576.0f), y, "+");
             }
             CFont::SetOrientation(ALIGN_LEFT);
-            PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(337.0f), "Page " + std::to_string(first / 7 + 1) + " / " + std::to_string((count + 6) / 7) + "   " + controllerSettings.status);
+            CFont::SetScale(ScaleX(0.30f), ScaleY(0.65f));
+            PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(337.0f), "< Previous page");
+            PrintPlain(ScaleXKeepCentered(240.0f), ScaleY(337.0f), "Page " + std::to_string(first / 7 + 1) + " / " + std::to_string((count + 6) / 7));
+            PrintPlain(ScaleXKeepCentered(440.0f), ScaleY(337.0f), "Next page >");
+            PrintPlain(ScaleXKeepCentered(210.0f), ScaleY(386.0f), settings.status);
+        }
+        if (menuSettings.active) {
+            CFont::SetScale(ScaleX(0.28f), ScaleY(0.65f));
+            PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(353.0f), ShowControllerPrompts() ?
+                "Square/X: restore selected default" : "Home: restore selected default");
         }
         CFont::SetScale(ScaleX(0.32f), ScaleY(0.7f));
-        PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(369.0f), HasPadInHands() ?
-            "D-pad: select/change   Back: close" : "Up/Down or wheel: select   Left/Right or click: change   Esc: close");
+        PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(369.0f), ShowControllerPrompts() ?
+            "Stick / D-pad: edit   L1/R1: page   Back: close" : "Arrows: edit   Click -/+: adjust   PgUp/PgDn: page");
+        PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(386.0f), "< Back / Esc");
+        if (menuSettings.active) {
+            CFont::SetOrientation(ALIGN_LEFT);
+            CFont::SetScale(ScaleX(0.5f * skyMenuOptions.tabScale), ScaleY(skyMenuOptions.tabScale));
+            PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(407.0f), "Menu text preview");
+            CFont::SetScale(ScaleX(0.32f * skyMenuOptions.helpScale), ScaleY(0.7f * skyMenuOptions.helpScale));
+            PrintPlain(ScaleXKeepCentered(52.0f), ScaleY(437.0f), "Help text preview - changes apply immediately");
+        }
     }
 
     static inline const plugin::char_t* GetHelpPrompt(const std::string& key) {
-        if (HasPadInHands()) return textLoader.Get(key.c_str());
+        if (ShowControllerPrompts()) return textLoader.Get(key.c_str());
         const char* replacement = nullptr;
 #ifdef GTAVC
         if (key == "FEI_BTX") replacement = "SK_KEYE";
@@ -1366,7 +1457,7 @@ public:
             }
         }
 
-        const float f = (CTimer::m_snTimeInMillisecondsPauseMode - previousTimeInMilliseconds) * 0.02f;
+        const float f = skyMenuOptions.Blend(CTimer::m_snTimeInMillisecondsPauseMode - previousTimeInMilliseconds);
         selectedItemPoly.x1 = std::lerp(selectedItemPoly.x1, tempItemPoly.x1, f);
         selectedItemPoly.y1 = std::lerp(selectedItemPoly.y1, tempItemPoly.y1, f);
         selectedItemPoly.x2 = std::lerp(selectedItemPoly.x2, tempItemPoly.x2, f);
@@ -1439,7 +1530,7 @@ public:
             case STATE_OPENING: {
 #if defined(GTA3) && !defined(LC01)
                 if (menuOffsetX > 0.0f)
-                    menuOffsetX -= (CTimer::m_snTimeInMillisecondsPauseMode - previousTimeInMilliseconds) * 1.0f;
+                    menuOffsetX = skyMenuOptions.reduceMotion ? 0.0f : std::max(0.0f, menuOffsetX - (CTimer::m_snTimeInMillisecondsPauseMode - previousTimeInMilliseconds) * skyMenuOptions.animationSpeed);
 
                 float alpha = (1.0f - (menuOffsetX / (DEFAULT_SCREEN_WIDTH)));
                 alpha = std::max(alpha, 0.0f);
@@ -1457,7 +1548,7 @@ public:
             case STATE_CLOSING: {
 #if defined(GTA3) && !defined(LC01)
                 if (menuOffsetX < DEFAULT_SCREEN_WIDTH)
-                    menuOffsetX += (CTimer::m_snTimeInMillisecondsPauseMode - previousTimeInMilliseconds) * 1.0f;
+                    menuOffsetX = skyMenuOptions.reduceMotion ? DEFAULT_SCREEN_WIDTH : std::min(DEFAULT_SCREEN_WIDTH, menuOffsetX + (CTimer::m_snTimeInMillisecondsPauseMode - previousTimeInMilliseconds) * skyMenuOptions.animationSpeed);
 
                 float alpha = (1.0f - (menuOffsetX / (DEFAULT_SCREEN_WIDTH)));
                 alpha = std::max(alpha, 0.0f);
@@ -2229,7 +2320,7 @@ public:
         CFont::SetFontStyle(FONT_SUBTITLES);
         CFont::SetScale(ScaleX(0.30f), ScaleY(0.62f));
         CFont::SetColor(CRGBA(225, 225, 225, GetAlpha()));
-        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(364.0f), HasPadInHands() ?
+        if (skyMenuOptions.showGInputHint) PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(364.0f), ShowControllerPrompts() ?
             "Back/Select: GInput settings" : "F6 / click here: GInput settings");
 
         CRGBA col = { 255, 255, 255, (uint8_t)GetAlpha(255) };
@@ -3137,7 +3228,7 @@ public:
         RwRenderStateSet(rwRENDERSTATETEXTUREPERSPECTIVE, (void*)FALSE);
         RwRenderStateSet(rwRENDERSTATESHADEMODE, (void*)rwSHADEMODEFLAT);
 
-        if (controllerSettings.active) { DrawControllerSettings(_this); return; }
+        if (SettingsActive()) { DrawControllerSettings(_this); return; }
 
         if (_this->m_nCurrentMenuPage == MENUPAGE_KEYBOARD_CONTROLS)
             return;
@@ -3147,6 +3238,14 @@ public:
         if (controllerPage && !wasControllerPage) frontendSprites.RetryMissing();
         wasControllerPage = controllerPage;
         if (controllerPage) DrawControllerScreen(_this);
+        if (_this->m_nCurrentMenuPage == MENUPAGE_DISPLAY_SETTINGS) {
+            CFont::SetOrientation(ALIGN_LEFT);
+            CFont::SetFontStyle(FONT_SUBTITLES);
+            CFont::SetScale(ScaleX(0.30f), ScaleY(0.62f));
+            CFont::SetColor(CRGBA(225, 225, 225, GetAlpha()));
+            PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(364.0f), ShowControllerPrompts() ?
+                "Back/Select: SkyUI options" : "F7 / click here: SkyUI options");
+        }
 
 #if defined(GTA3) && defined(LC01)
         if (_this->m_nCurrentMenuPage == MENUPAGE_STATS)
@@ -3245,6 +3344,7 @@ public:
         const float rowRoom = ScaleX(560.0f);
         if (widestRow > rowRoom && widestRow > reservedSpacing)
             CFont::SetScale(ScaleX(0.64f * skyMenuOptions.tabScale) *
+                ((_this->m_nPrefsLanguage >= 1 && _this->m_nPrefsLanguage <= 4) ? 0.8f : 1.0f) *
                 (rowRoom - reservedSpacing) / (widestRow - reservedSpacing), ScaleY(1.0f * skyMenuOptions.tabScale));
 #endif
 #endif
@@ -3717,7 +3817,7 @@ public:
 
         frontendSprites.Clear();
         const std::string frontendDirectory = PLUGIN_PATH("SkyUI\\frontend");
-        std::ofstream(PLUGIN_PATH("SkyUI-assets.log"), std::ios::trunc) << "SkyUI v8 private assets\n";
+        std::ofstream(PLUGIN_PATH("SkyUI-assets.log"), std::ios::trunc) << "SkyUI v12 private assets\n";
 #define SKY_LOAD(store, directory, name) store.Load(directory, #name, sky_png_##name, sizeof(sky_png_##name))
 #ifdef GTASA
         SKY_LOAD(frontendSprites, frontendDirectory, CONTROLLER_PS2);
@@ -3783,7 +3883,7 @@ public:
         hudSprites.Clear();
 #endif
 
-        controllerSettings.active = false;
+        controllerSettings.active = menuSettings.active = false; settingsNavigation.Reset();
 
         initialised = false;
     }
@@ -3815,7 +3915,7 @@ public:
     }
 
     static inline void Clear(CMenuManager* _this, bool run = false) {
-        controllerSettings.active = false;
+        controllerSettings.active = menuSettings.active = false; settingsNavigation.Reset();
         if (saveMenuActive)
             currentInput = INPUT_STANDARD;
         else
@@ -3961,7 +4061,7 @@ public:
         CFont::SetOrientation(ALIGN_LEFT);
         CFont::SetScale(ScaleX(0.3f), ScaleY(0.7f));
         CFont::SetColor(CRGBA(225, 225, 225, 255));
-        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(112.0f), std::string(HasPadInHands() ? "Square/X: save camera photos " : "F5: save camera photos ") + (_this->m_bPrefsSavePhotos ? "On" : "Off"));
+        PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(112.0f), std::string(ShowControllerPrompts() ? "Square/X: save camera photos " : "F5: save camera photos ") + (_this->m_bPrefsSavePhotos ? "On" : "Off"));
         if (!galleryStatus.empty()) PrintPlain(ScaleXKeepCentered(40.0f), ScaleY(132.0f), galleryStatus);
 
         if (currentInput == INPUT_TAB) {
@@ -3991,7 +4091,7 @@ public:
 
             strcpy(gString, textLoader.Get("FEG_HOW"));
 
-            if (!HasPadInHands())
+            if (!ShowControllerPrompts())
                 CMessages::InsertPlayerControlKeysInString(gString);
             CFont::PrintString(ScaleXKeepCentered(100.0f), ScaleY(247.0f), gString);
         }
@@ -4366,8 +4466,8 @@ public:
                 playerZoom = CLAMP(playerZoom, 0.3f, 1.0f);
 
                 static uint32_t prevTime = 0;
-                const float f = (CTimer::m_snTimeInMillisecondsPauseMode - prevTime) * 0.02f;
-                playerZoomLerp = std::lerp(playerZoomLerp, playerZoom, f * 0.5f);
+                const float f = skyMenuOptions.Blend(CTimer::m_snTimeInMillisecondsPauseMode - prevTime, 0.01f);
+                playerZoomLerp = std::lerp(playerZoomLerp, playerZoom, f);
                 prevTime = CTimer::m_snTimeInMillisecondsPauseMode;
 
             }
@@ -4499,8 +4599,8 @@ public:
             playerRotationLerp += 360.0f;
         }
 
-        const float f = (CTimer::m_snTimeInMillisecondsPauseMode - prevTime) * 0.02f;
-        playerRotationLerp = std::lerp(playerRotationLerp, playerRotation, f * 0.5f);
+        const float f = skyMenuOptions.Blend(CTimer::m_snTimeInMillisecondsPauseMode - prevTime, 0.01f);
+        playerRotationLerp = std::lerp(playerRotationLerp, playerRotation, f);
 
         prevTime = CTimer::m_snTimeInMillisecondsPauseMode;
 
@@ -4602,7 +4702,7 @@ public:
         // IDB: DrawFrontEnd tail-jumps to DrawBackground, E9 27 F4 FF FF.
         const uint8_t expected[] = {0xE9, 0x27, 0xF4, 0xFF, 0xFF};
         std::ofstream log(PLUGIN_PATH("SkyUI-render.log"), std::ios::trunc);
-        log << "SkyUI v8 SA frontend; " << plugin::GetGameVersionName() << '\n';
+        log << "SkyUI v12 SA frontend; " << plugin::GetGameVersionName() << '\n';
         HMODULE module = nullptr;
         char modulePath[MAX_PATH] = {};
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -5056,7 +5156,7 @@ public:
 
 #ifdef GTA3
         auto processButtonPresses = [](CMenuManager* _this, uint32_t) SKY_FASTCALL_LAMBDA {
-            if (!controllerSettings.active && currentInput == INPUT_STANDARD) {
+            if (!SettingsActive() && currentInput == INPUT_STANDARD) {
                 if (GetEsc() || GetEscGamePadOnly() || GetCheckHoverForStandardInput(_this)) {
                     _this->ProcessButtonPresses();
                 }
@@ -5068,7 +5168,7 @@ public:
         };
 #else
         auto userInput = [](CMenuManager* _this, uint32_t) SKY_FASTCALL_LAMBDA {
-            if (!controllerSettings.active && currentInput == INPUT_STANDARD) {
+            if (!SettingsActive() && currentInput == INPUT_STANDARD) {
                 if (GetEsc() || GetEscGamePadOnly() || GetCheckHoverForStandardInput(_this)) {
                     _this->UserInput();
                 }
@@ -5211,6 +5311,11 @@ public:
         plugin::patch::SetUChar(0x57C2E4, 0xEB);
 
         auto drawTripSkipSprite = [](CSprite2d* sprite, uint32_t, CRect const& rect, CRGBA const& col) SKY_FASTCALL_LAMBDA {
+            SkyRenderStateGuard renderState;
+            if (!hudSprites.GetTex("SkipHigh") || !hudSprites.GetTex("SkipIcon")) {
+                sprite->Draw(rect, col);
+                return;
+            }
             const float x = rect.left;
             const float y = rect.top;
 
@@ -5227,7 +5332,10 @@ public:
             if (FLASH_ITEM(1000, 500))
                 hudSprites.Draw("SkipIcon", x + (w * 1.15f), y + (h * 0.775f), w * 0.425f, h * 0.425f, col);
         };
-        plugin::patch::RedirectCall(0x58A1F3, LAMBDA(void, __fastcall, drawTripSkipSprite, CSprite2d * sprite, uint32_t, CRect const& rect, CRGBA const& col));
+        // Preserve other HUD mods that already own the trip-skip call.
+        if (skyMenuOptions.ps2TripSkip && *reinterpret_cast<const uint8_t*>(0x58A1F3) == 0xE8 &&
+            0x58A1F8 + *reinterpret_cast<const int32_t*>(0x58A1F4) == 0x728350)
+            plugin::patch::RedirectCall(0x58A1F3, LAMBDA(void, __fastcall, drawTripSkipSprite, CSprite2d * sprite, uint32_t, CRect const& rect, CRGBA const& col));
 #endif
 
 

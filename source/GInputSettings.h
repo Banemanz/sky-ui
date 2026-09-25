@@ -9,6 +9,7 @@
 // loaded module's existing INI; GInput applies them through its focus reload.
 class GInputSettings {
 public:
+    virtual ~GInputSettings() = default;
     struct Option { const char* section; const char* key; const char* label; int fallback, min, max, step; };
     std::wstring path;
     std::string status;
@@ -67,7 +68,20 @@ public:
 #endif
     };
     static std::wstring Wide(const char* s) { return std::wstring(s, s + strlen(s)); }
+    void MoveSelection(int direction, bool page = false) {
+        const int count = static_cast<int>(options.size());
+        if (!count) { selection = 0; return; }
+        selection = std::clamp(selection, 0, count - 1);
+        if (page) {
+            const int pages = (count + 6) / 7;
+            const int next = (selection / 7 + (direction < 0 ? pages - 1 : 1)) % pages;
+            selection = std::min(next * 7 + selection % 7, count - 1);
+        } else selection = (selection + (direction < 0 ? count - 1 : 1)) % count;
+    }
     bool Init(HMODULE module) {
+        active = false;
+        selection = 0;
+        selectedPad = 1;
         path.clear();
         status.clear();
         wchar_t buffer[32768];
@@ -85,12 +99,12 @@ public:
     const char* Section(const Option& o, int padOverride = 0) const {
         return !strcmp(o.section, "Pad1") && (padOverride ? padOverride : selectedPad) == 2 ? "Pad2" : o.section;
     }
-    int Read(size_t i, int padOverride = 0) const {
+    virtual int Read(size_t i, int padOverride = 0) const {
         const auto& o = options.at(i);
         if (!strcmp(o.section, "SkyUI")) return selectedPad;
         return std::clamp(static_cast<int>(GetPrivateProfileIntW(Wide(Section(o, padOverride)).c_str(), Wide(o.key).c_str(), o.fallback, path.c_str())), o.min, o.max);
     }
-    std::string ValueLabel(size_t i) const {
+    virtual std::string ValueLabel(size_t i) const {
         const auto& o = options.at(i);
         const int value = Read(i);
         if (!strcmp(o.key, "ControlsSet")) {
@@ -104,7 +118,7 @@ public:
         if (o.min == 0 && o.max == 1) return value ? "On" : "Off";
         return std::to_string(value);
     }
-    bool Write(size_t i, int value, int padOverride = 0) {
+    virtual bool Write(size_t i, int value, int padOverride = 0) {
         if (path.empty()) { status = "GInput settings unavailable"; return false; }
         const auto& o = options.at(i);
         value = std::clamp(value, o.min, o.max);
@@ -120,12 +134,17 @@ public:
         status = "Saved";
         return true;
     }
-    bool Change(int direction) {
+    virtual bool Change(int direction) {
+        if (!direction || selection < 0 || static_cast<size_t>(selection) >= options.size()) return false;
+        direction = direction < 0 ? -1 : 1;
         const auto& o = options.at(selection);
         int value = Read(selection);
         if (o.min == 0 && o.max == 1) value ^= 1;
         else if (selection == 0 || !strcmp(o.section, "SkyUI")) value = value + direction < o.min ? o.max : value + direction > o.max ? o.min : value + direction;
         else value += direction * o.step;
+        value = std::clamp(value, o.min, o.max);
+        // A saturated slider is not an edit: avoid disk writes and focus reloads.
+        if (value == Read(selection)) return false;
         return Write(selection, value);
     }
 };

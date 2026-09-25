@@ -23,9 +23,12 @@ inline std::vector<int> ScanGalleryFiles(const std::filesystem::path& directory)
     std::error_code ec;
     std::filesystem::directory_iterator it(directory, ec), end;
     while (!ec && it != end) {
-        if (it->is_regular_file(ec)) {
-            const int id = GalleryId(it->path().filename().string());
-            if (id && !ec) result.push_back(id);
+        // A broken/inaccessible entry must not terminate enumeration.
+        std::error_code entryError;
+        if (it->is_regular_file(entryError) && !entryError) {
+            const auto utf8 = it->path().filename().u8string();
+            const int id = GalleryId(std::string(utf8.begin(), utf8.end()));
+            if (id) result.push_back(id);
         }
         it.increment(ec);
     }

@@ -23,9 +23,7 @@ static float GetAspectRatio() {
 #elif GTASA
     float& fScreenAspectRatio = CDraw::ms_fAspectRatio;
 #endif
-    const float display = SCREEN_HEIGHT > 0 ? float(SCREEN_WIDTH) / SCREEN_HEIGHT : DEFAULT_SCREEN_ASPECT_RATIO;
-    return skyMenuOptions.displayAspect || !std::isfinite(fScreenAspectRatio) || fScreenAspectRatio <= 0.0f
-        ? display : fScreenAspectRatio;
+    return skyMenuOptions.Aspect(float(SCREEN_WIDTH), float(SCREEN_HEIGHT), fScreenAspectRatio);
 }
 
 #define SCREEN_ASPECT_RATIO GetAspectRatio() // (SCREEN_WIDTH / SCREEN_HEIGHT)
