@@ -69,6 +69,7 @@ public:
     };
     static std::wstring Wide(const char* s) { return std::wstring(s, s + strlen(s)); }
     void MoveSelection(int direction, bool page = false) {
+        if (!direction) return;
         const int count = static_cast<int>(options.size());
         if (!count) { selection = 0; return; }
         selection = std::clamp(selection, 0, count - 1);
@@ -89,9 +90,11 @@ public:
         if (!n || n >= 32768) return false;
         path.assign(buffer, n);
         auto dot = path.find_last_of(L'.');
-        if (dot == std::wstring::npos) { path.clear(); return false; }
+        const auto slash = path.find_last_of(L"\\/");
+        if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash)) { path.clear(); return false; }
         path.replace(dot, std::wstring::npos, L".ini");
-        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        const auto attributes = GetFileAttributesW(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
             path.clear(); status = "GInput INI missing beside its ASI"; return false;
         }
         return true;
@@ -100,11 +103,14 @@ public:
         return !strcmp(o.section, "Pad1") && (padOverride ? padOverride : selectedPad) == 2 ? "Pad2" : o.section;
     }
     virtual int Read(size_t i, int padOverride = 0) const {
-        const auto& o = options.at(i);
+        if (i >= options.size()) return 0;
+        const auto& o = options[i];
         if (!strcmp(o.section, "SkyUI")) return selectedPad;
+        if (path.empty()) return o.fallback;
         return std::clamp(static_cast<int>(GetPrivateProfileIntW(Wide(Section(o, padOverride)).c_str(), Wide(o.key).c_str(), o.fallback, path.c_str())), o.min, o.max);
     }
     virtual std::string ValueLabel(size_t i) const {
+        if (i >= options.size()) return {};
         const auto& o = options.at(i);
         const int value = Read(i);
         if (!strcmp(o.key, "ControlsSet")) {
@@ -119,6 +125,7 @@ public:
         return std::to_string(value);
     }
     virtual bool Write(size_t i, int value, int padOverride = 0) {
+        if (i >= options.size()) { status = "Invalid setting"; return false; }
         if (path.empty()) { status = "GInput settings unavailable"; return false; }
         const auto& o = options.at(i);
         value = std::clamp(value, o.min, o.max);
@@ -133,6 +140,12 @@ public:
         }
         status = "Saved";
         return true;
+    }
+    bool Repeatable(size_t i) const {
+        if (i >= options.size()) return false;
+        const auto& o = options[i];
+        return !(o.min == 0 && o.max == 1) && strcmp(o.key, "ControlsSet") &&
+            strcmp(o.section, "SkyUI") && strcmp(o.key, "iPromptMode") && strcmp(o.key, "fMenuAspectRatio");
     }
     virtual bool Change(int direction) {
         if (!direction || selection < 0 || static_cast<size_t>(selection) >= options.size()) return false;

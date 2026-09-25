@@ -6,10 +6,12 @@
 class SkyMenuNavigation {
     int held = 0, stick = 0;
     uint32_t changed = 0;
-    bool repeating = false;
+    bool repeating = false, repeatedEvent = false;
 public:
-    void Reset() { held = stick = 0; changed = 0; repeating = false; }
+    bool Repeated() const { return repeatedEvent; }
+    void Reset() { repeatedEvent = false; held = stick = 0; changed = 0; repeating = false; }
     int Update(uint32_t now, int x, int y, bool left, bool right, bool up, bool down) {
+        repeatedEvent = false;
         // GTA's controller axes are in [-128,128]. Hysteresis filters drift.
         const int ax = std::abs(x), ay = std::abs(y);
         if (ax < 40 && ay < 40) stick = 0;
@@ -25,7 +27,7 @@ public:
         }
         if (!direction) return 0;
         if (uint32_t(now - changed) >= (repeating ? 100u : 400u)) {
-            changed = now; repeating = true; return direction;
+            changed = now; repeating = true; repeatedEvent = true; return direction;
         }
         return 0;
     }

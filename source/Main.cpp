@@ -73,6 +73,7 @@
 #include "GInputSettings.h"
 #include "SkyUISettings.h"
 #include "MenuNavigation.h"
+#include "CallbackRegistry.h"
 #include "GalleryFiles.h"
 #include "FrontendTextCalls.h"
 #include <filesystem>
@@ -271,6 +272,10 @@ public:
     static inline int settingsOwnerPage = -1;
     static inline SkyMenuNavigation settingsNavigation;
     static inline bool SettingsActive() { return controllerSettings.active || menuSettings.active; }
+    static inline bool KnownMenu(const CMenuManager* menu) {
+        return menu && int(menu->m_nCurrentMenuPage) >= 0 && int(menu->m_nCurrentMenuPage) < NUM_MENU_PAGES &&
+            int(menu->m_nCurrentMenuEntry) >= 0 && int(menu->m_nCurrentMenuEntry) < NUM_ENTRIES;
+    }
 
 #ifdef GTASA
 #define PAD_IV_CONTROLS_MODE (1)
@@ -568,6 +573,7 @@ public:
     }
 
     static inline void SwitchMenuPage(CMenuManager* _this, int32_t page, bool refresh) {
+        if (page < 0 || page >= NUM_MENU_PAGES) return;
         _this->m_nPreviousMenuPage = _this->m_nCurrentMenuPage;
         _this->m_nCurrentMenuPage = page;
         _this->m_nCurrentMenuEntry = 0;
@@ -657,11 +663,11 @@ public:
         float bottomOffset = (58.0f);
         float leftRightOffset = (16.0f);
 
-        tempBackgroundPoly.x1 = (x - halfw + leftRightOffset - ScaleX(plugin::RandomNumberInRange(-me / 2, me / 2)));  tempBackgroundPoly.x2 = (x + halfw - leftRightOffset + ScaleX(plugin::RandomNumberInRange(-me / 2, me / 2)));
-        tempBackgroundPoly.y1 = (y - halfh + topOffset - ScaleY(plugin::RandomNumberInRange(-me / 2, me / 2)));  tempBackgroundPoly.y2 = (y - halfh + topOffset - ScaleY(plugin::RandomNumberInRange(-me / 2, me / 2)));
+        tempBackgroundPoly.x1 = (x - halfw + leftRightOffset - plugin::RandomNumberInRange(-me / 2, me / 2));  tempBackgroundPoly.x2 = (x + halfw - leftRightOffset + plugin::RandomNumberInRange(-me / 2, me / 2));
+        tempBackgroundPoly.y1 = (y - halfh + topOffset - plugin::RandomNumberInRange(-me / 2, me / 2));  tempBackgroundPoly.y2 = (y - halfh + topOffset - plugin::RandomNumberInRange(-me / 2, me / 2));
 
-        tempBackgroundPoly.x3 = (x - halfw + leftRightOffset - ScaleX(plugin::RandomNumberInRange(-me / 2, me / 2)));  tempBackgroundPoly.x4 = (596.0f);
-        tempBackgroundPoly.y3 = (y + halfh - bottomOffset + ScaleY(plugin::RandomNumberInRange(-me / 2, me / 2)));  tempBackgroundPoly.y4 = (366.0f);
+        tempBackgroundPoly.x3 = (x - halfw + leftRightOffset - plugin::RandomNumberInRange(-me / 2, me / 2));  tempBackgroundPoly.x4 = (596.0f);
+        tempBackgroundPoly.y3 = (y + halfh - bottomOffset + plugin::RandomNumberInRange(-me / 2, me / 2));  tempBackgroundPoly.y4 = (366.0f);
 
         updateBackPoly = false;
     }
@@ -740,30 +746,24 @@ public:
     typedef uint8_t(*MenuOptionCB)(uint32_t action, int8_t arrows, bool* back, bool enter);
     typedef plugin::char_t* (*MenuOptionStringsCB)(uint32_t action);
 
-    static inline std::vector<MenuOptionCB> menuOptionCallbacks = {};
-    static inline std::vector<MenuOptionStringsCB> menuOptionStringCallbacks = {};
+    static inline SkyCallbacks<MenuOptionCB> menuOptionCallbacks = {};
+    static inline SkyCallbacks<MenuOptionStringsCB> menuOptionStringCallbacks = {};
     static inline std::unordered_map<uint32_t, uint32_t> menuOptionOrientationsMap = {};
-    static inline std::vector<void(*)(bool)> saveOrLoadCallbacks = {};
+    static inline SkyCallbacks<void(*)(bool)> saveOrLoadCallbacks = {};
 
     static inline void ProcessMenuOptionsCB(MenuOptionCB cb) {
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma comment(linker, "/EXPORT:" __FUNCTION__"=" __FUNCDNAME__)
 #endif
 
-        if (!menuOptionCallbacks.capacity()) {
-            menuOptionCallbacks.reserve(10);
-        }
-        if (cb) menuOptionCallbacks.push_back(cb);
+        menuOptionCallbacks.Add(cb);
     }
 
     static inline void ProcessMenuOptionsStringsCB(MenuOptionStringsCB cb) {
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma comment(linker, "/EXPORT:" __FUNCTION__"=" __FUNCDNAME__)
 #endif
-        if (!menuOptionStringCallbacks.capacity()) {
-            menuOptionStringCallbacks.reserve(10);
-        }
-        if (cb) menuOptionStringCallbacks.push_back(cb);
+        menuOptionStringCallbacks.Add(cb);
     }
 
     static inline void AddEntryToMenuScreen(uint32_t screen, uint32_t entry, uint32_t action, const char* entryName, uint32_t targetScreen, uint32_t orientation) {
@@ -783,16 +783,14 @@ public:
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma comment(linker, "/EXPORT:" __FUNCTION__"=" __FUNCDNAME__)
 #endif
-        if (!saveOrLoadCallbacks.capacity()) {
-            saveOrLoadCallbacks.reserve(10);
-        }
-        if (cb) saveOrLoadCallbacks.push_back(cb);
+        saveOrLoadCallbacks.Add(cb);
     }
 
     static inline void EnterTab(CMenuManager* _this, int32_t i = -1, bool playSound = true) {
         if (saveMenuActive)
             return;
 
+        if (i != -1 && !IsTabAvailable(_this, i)) return;
         if (i != -1)
             currentTab = i;
         else
@@ -1200,6 +1198,7 @@ public:
             (pad->NewState.RightShoulder1 && !pad->OldState.RightShoulder1)) settings.MoveSelection(1, true);
         const int first = settings.selection / 7 * 7;
         int edit = navigation == 1 ? -1 : navigation == 2 || GetEnter() ? 1 : 0;
+        if (settingsNavigation.Repeated() && !settings.Repeatable(settings.selection)) edit = 0;
         if (menu->m_bShowMouse) {
             for (int i = first; i < std::min(first + 7, count); ++i) {
                 float y = ScaleY(116.0f + (i - first) * 30.0f);
@@ -1225,7 +1224,8 @@ public:
                 prefsConfigSetup = controllerSettings.Read(0, 1) - 1;
                 prefsVibration = controllerSettings.Read(1) != 0;
                 configLayout = 0;
-                SetFocus();
+                // Selecting which pad to edit is panel state, not a GInput edit.
+                if (strcmp(settings.options[settings.selection].section, "SkyUI")) SetFocus();
             }
 #ifdef GTAVC
             updateItemPoly = true;
@@ -1328,6 +1328,11 @@ public:
     }
 
     static inline void Process(CMenuManager* _this) {
+        if (!KnownMenu(_this)) {
+            controllerSettings.active = menuSettings.active = false;
+            settingsNavigation.Reset();
+            return;
+        }
         justEnteredTab = false;
         ClearHelpText();
 
@@ -1675,13 +1680,7 @@ public:
                 }
                 break;
             default:
-                for (auto& it : menuOptionStringCallbacks) {
-                    auto out = it(action);
-                    if (out) {
-                        str = out;
-                        break;
-                    }
-                }
+                if (auto out = menuOptionStringCallbacks.Invoke(action)) str = out;
                 break;
         }
 
@@ -1818,11 +1817,7 @@ public:
                 SaveSettings();
                 return 1;
             default:
-                for (auto& it : menuOptionCallbacks) {
-                    auto res = it(action, arrows, back, enter);
-                    if (res)
-                        return res;
-                }
+                if (auto result = menuOptionCallbacks.Invoke(action, arrows, back, enter)) return result;
                 break;
         }
 
@@ -2771,6 +2766,7 @@ public:
     }
 
     static inline void DrawBack(CMenuManager* _this) {
+        if (!KnownMenu(_this) || SCREEN_WIDTH <= 0 || SCREEN_HEIGHT <= 0) return;
         SkyRenderStateGuard renderState;
         RwRenderStateSet(rwRENDERSTATETEXTUREFILTER, (void*)rwFILTERLINEAR);
         RwRenderStateSet(rwRENDERSTATESRCBLEND, (void*)rwBLENDSRCALPHA);
@@ -3040,6 +3036,7 @@ public:
     }
 
     static inline bool IsTabAvailable(CMenuManager* _this, int32_t tab) {
+        if (tab < 0 || static_cast<size_t>(tab) >= tabs.size()) return false;
 #if defined(GTA3) && defined(GTA3_MENU_MAP) && !defined(LC01)
         if (menuMap) {
             if (tab == TAB_LAN)
@@ -3204,6 +3201,7 @@ public:
     }
 
     static inline void DrawFront(CMenuManager* _this) {
+        if (!KnownMenu(_this) || SCREEN_WIDTH <= 0 || SCREEN_HEIGHT <= 0) return;
         SkyRenderStateGuard renderState;
         if (timeToWaitBeforeStateChange == -1)
             return;
@@ -3228,6 +3226,14 @@ public:
         RwRenderStateSet(rwRENDERSTATETEXTUREPERSPECTIVE, (void*)FALSE);
         RwRenderStateSet(rwRENDERSTATESHADEMODE, (void*)rwSHADEMODEFLAT);
 
+#ifdef GTAVC
+        static float layoutWidth = 0, layoutHeight = 0, layoutAspect = 0;
+        if (layoutWidth != SCREEN_WIDTH || layoutHeight != SCREEN_HEIGHT || layoutAspect != GetAspectRatio()) {
+            layoutWidth = SCREEN_WIDTH; layoutHeight = SCREEN_HEIGHT; layoutAspect = GetAspectRatio();
+            updateItemPoly = true;
+            updateBackPoly = true;
+        }
+#endif
         if (SettingsActive()) { DrawControllerSettings(_this); return; }
 
         if (_this->m_nCurrentMenuPage == MENUPAGE_KEYBOARD_CONTROLS)
@@ -3817,7 +3823,7 @@ public:
 
         frontendSprites.Clear();
         const std::string frontendDirectory = PLUGIN_PATH("SkyUI\\frontend");
-        std::ofstream(PLUGIN_PATH("SkyUI-assets.log"), std::ios::trunc) << "SkyUI v12 private assets\n";
+        std::ofstream(PLUGIN_PATH("SkyUI-assets.log"), std::ios::trunc) << "SkyUI v13 private assets\n";
 #define SKY_LOAD(store, directory, name) store.Load(directory, #name, sky_png_##name, sizeof(sky_png_##name))
 #ifdef GTASA
         SKY_LOAD(frontendSprites, frontendDirectory, CONTROLLER_PS2);
@@ -4623,9 +4629,7 @@ public:
         prefsVibration = GetPrivateProfileIntA("CONTROLLER", "PrefsVibration", prefsVibration,
             skyMenuOptions.path.c_str()) != 0;
 
-        for (auto& it : saveOrLoadCallbacks) {
-            it(true);
-        }
+        saveOrLoadCallbacks.Invoke(true);
     }
 
     static inline void SaveSettings() {
@@ -4637,9 +4641,7 @@ public:
         WritePrivateProfileStringA("CONTROLLER", "PrefsConfigSetup", setup.c_str(), skyMenuOptions.path.c_str());
         WritePrivateProfileStringA("CONTROLLER", "PrefsVibration", prefsVibration ? "1" : "0", skyMenuOptions.path.c_str());
 
-        for (auto& it : saveOrLoadCallbacks) {
-            it(false);
-        }
+        saveOrLoadCallbacks.Invoke(false);
     }
 
 #ifdef GTASA
@@ -4702,7 +4704,7 @@ public:
         // IDB: DrawFrontEnd tail-jumps to DrawBackground, E9 27 F4 FF FF.
         const uint8_t expected[] = {0xE9, 0x27, 0xF4, 0xFF, 0xFF};
         std::ofstream log(PLUGIN_PATH("SkyUI-render.log"), std::ios::trunc);
-        log << "SkyUI v12 SA frontend; " << plugin::GetGameVersionName() << '\n';
+        log << "SkyUI v13 SA frontend; " << plugin::GetGameVersionName() << '\n';
         HMODULE module = nullptr;
         char modulePath[MAX_PATH] = {};
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -5156,6 +5158,7 @@ public:
 
 #ifdef GTA3
         auto processButtonPresses = [](CMenuManager* _this, uint32_t) SKY_FASTCALL_LAMBDA {
+            if (!KnownMenu(_this)) { _this->ProcessButtonPresses(); return; }
             if (!SettingsActive() && currentInput == INPUT_STANDARD) {
                 if (GetEsc() || GetEscGamePadOnly() || GetCheckHoverForStandardInput(_this)) {
                     _this->ProcessButtonPresses();
@@ -5168,6 +5171,7 @@ public:
         };
 #else
         auto userInput = [](CMenuManager* _this, uint32_t) SKY_FASTCALL_LAMBDA {
+            if (!KnownMenu(_this)) { _this->UserInput(); return; }
             if (!SettingsActive() && currentInput == INPUT_STANDARD) {
                 if (GetEsc() || GetEscGamePadOnly() || GetCheckHoverForStandardInput(_this)) {
                     _this->UserInput();

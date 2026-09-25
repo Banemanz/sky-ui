@@ -13,6 +13,9 @@ class SkyPrivateSprites {
     std::map<std::string, bool> loggedDraw;
 
 public:
+    SkyPrivateSprites() = default;
+    SkyPrivateSprites(const SkyPrivateSprites&) = delete;
+    SkyPrivateSprites& operator=(const SkyPrivateSprites&) = delete;
     void Clear() {
         for (auto& item : textures) if (item.second) RwTextureDestroy(item.second);
         textures.clear();
@@ -43,12 +46,16 @@ public:
             }
         }
         auto& previous = textures[name];
-        if (previous) RwTextureDestroy(previous);
-        previous = texture;
+        // Commit replacement only after a successful upload. Keep a working
+        // raster if an override/reload fails during the same RW lifetime.
+        if (texture) {
+            if (previous) RwTextureDestroy(previous);
+            previous = texture;
+        }
         loggedDraw[name] = false;
         if (texture) RwTextureSetAddressing(texture, rwTEXTUREADDRESSCLAMP);
         std::ofstream log(PLUGIN_PATH("SkyUI-assets.log"), std::ios::app);
-        log << path << ": " << origin << ", upload=" << skyTextureUploadStatus << ", texture=" << texture << '\n';
+        log << path << ": " << origin << ", upload=" << skyTextureUploadStatus << ", texture=" << previous << ", retained=" << (!texture && previous) << '\n';
     }
     RwTexture* GetTex(const std::string& name) const {
         auto it = textures.find(name);
